@@ -1,0 +1,40 @@
+SCHEDULER thin_sched; 
+
+VAR interPrintInterval = 200;
+
+IF( R6 < CURRENT_TIME_MS) {
+    SET(R6, CURRENT_TIME_MS + interPrintInterval);
+
+    FOREACH(VAR sbf IN SUBFLOWS) {
+        PRINT("id = %d", sbf.ID);
+        PRINT("RTT = %d", sbf.RTT / 10000);
+        PRINT("CWND = %d", sbf.CWND);
+        PRINT("DELAY_OUT = %d", sbf.DELAY_OUT);
+        PRINT("DELAY_IN = %d", sbf.DELAY_IN);
+    }
+}
+
+/* Retransmission handling as usual (omited for simplicity) */
+IF (!RQ.EMPTY) {
+  VAR sbfCandidateR = SUBFLOWS.FILTER(sbf => sbf.CWND > sbf.SKBS_IN_FLIGHT + sbf.QUEUED AND !sbf.THROTTLED AND !sbf.LOSSY).FILTER(sbf => sbf.HAS_WINDOW_FOR(RQ.TOP) AND !RQ.TOP.SENT_ON(sbf)).MIN(sbf => sbf.DELAY_OUT);
+  IF (sbfCandidateR != NULL) {
+    sbfCandidateR.PUSH(RQ.POP());
+    sbfCandidateR.SET_USER(1);
+    RETURN;
+  }
+}
+ 
+/* No packets in queue => nothing to do */ 
+IF (Q.EMPTY) { RETURN; } 
+ 
+/* Retrieve all subflow candidates */
+VAR candidates = SUBFLOWS.FILTER(sbf => sbf.CWND > sbf.SKBS_IN_FLIGHT + sbf.QUEUED AND 
+                    !sbf.THROTTLED AND !sbf.LOSSY AND sbf.HAS_WINDOW_FOR(Q.TOP));
+ 
+/* No subflow candidates => nothing to do */ 
+IF (candidates.EMPTY) { RETURN; }
+ 
+/* First, schedule as usual. There is at least one subflow. */
+VAR packetToSend = Q.TOP;
+VAR bestSbf = candidates.MIN(sbf => sbf.RTT);
+bestSbf.PUSH(Q.POP()); /* this is nasty in the language with pop */

@@ -1,0 +1,56 @@
+SCHEDULER dissertation_redundant_verbose;
+
+VAR sbfCandidates = SUBFLOWS.FILTER(sbf => !sbf.THROTTLED AND 
+  sbf.CWND > sbf.SKBS_IN_FLIGHT + sbf.QUEUED AND !sbf.LOSSY);
+
+/*PRINT("Scheduler called with X subflows");
+PRINT("... pushed packets so far %u", R2);
+PRINT("Scheduler called with %u subflows", sbfCandidates.COUNT);
+PRINT("... and Q.COUNT %u", Q.COUNT);
+PRINT("... and QU.COUNT %u", QU.COUNT);*/
+
+/*IF (sbfCandidates.EMPTY) {
+  PRINT("Returning with empty sbfCandidates"); 
+  RETURN; 
+}*/
+
+IF (!RQ.EMPTY) {
+  VAR sbfCandidate = SUBFLOWS.FILTER(sbf => 
+    sbf.HAS_WINDOW_FOR(RQ.TOP) AND  
+    !RQ.TOP.SENT_ON(sbf)).MIN(sbf => sbf.RTT);
+  IF (sbfCandidate != NULL) {
+    PRINT("Send from RQ on sbf %u", sbfCandidate.ID);
+    sbfCandidate.PUSH(RQ.POP());
+    RETURN;
+  } ELSE {
+    PRINT("No sbf found for packet in RQ");
+  }
+}
+
+PRINT("Before loop with a total of sbfs %u", sbfCandidates.COUNT);
+
+FOREACH(VAR sbf IN sbfCandidates) {
+  PRINT("In the loop with sbf %u", sbf.ID);
+  
+  VAR skb = QU.FILTER(s => !s.SENT_ON(sbf)).TOP; 
+  /* are all QU packets sent on this sbf? */
+  IF(skb != NULL) {
+    PRINT("Send from QU on sbf %u", sbf.ID);
+    PRINT("... packet with seq %u", skb.SEQ);
+    PRINT("... packet with length %u", skb.LENGTH);
+    sbf.PUSH(skb);
+  } ELSE {
+    IF (Q.EMPTY) { 
+        PRINT("Sbf %u has nothing to do", sbf.ID);
+    } ELSE {
+        PRINT("Send from Q on sbf %u", sbf.ID);
+        PRINT("... packet with seq %u", Q.TOP);
+        PRINT("... packet with length %u", Q.TOP.LENGTH);
+        
+        SET(R2, R2 + 1);
+        sbf.PUSH(Q.POP());
+    }
+  }
+}
+
+PRINT("Scheduler finished");
